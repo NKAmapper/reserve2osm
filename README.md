@@ -11,6 +11,8 @@ Extracts protected areas from Naturbase and generates OSM file
 * The latest data from Naturbase may be downloaded [here](https://karteksport.miljodirektoratet.no/). Select the whole country or a county, GeoJSON file format and any projection.
 * The file name from Naturbase _without_ the _".json"_ extension is the only input parameter to the program.
 * The program will produce a OSM file with nested relations ready for uploading or updating OSM.
+  * The _protect_class_ tag is set according to the given IUCN class, or if missing dervied from given protection type
+  * The _name_ tag is set according to the given official name, or if missing derived from the given protection type, including with refinements for bird reserves and with simplifcations for very long names
 * Please review in JOSM:
   * All boundary lines are reproduced as given from Naturbase. Node density will be high at coastlines and rivers/streams. Simplification with factor 0.1-0.2 may or may not be desired.
   * Boundary lines with more than 2000 nodes will require splitting, for example at start/end of coastlines.
