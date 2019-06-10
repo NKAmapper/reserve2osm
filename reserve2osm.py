@@ -13,7 +13,7 @@ import sys
 import copy
 
 
-version = "0.3.0"
+version = "0.3.1"
 
 debug = False
 
@@ -22,32 +22,32 @@ verneform_description = {
 	'BV':    u'Biotopvernområde',
 	'BVS':   u'Biotopvernområde',  # Svalbardmiljøloven
 	'BVV':   u'Biotopvernområde',  # etter viltloven
-	'DO':    u'Dyrefredningsområde',
+	'DO':    u'Dyrefredningsområde',
 	'D':     'Dyrelivsfredning',
 	'GVS':   u'Geotopvernområde',  # Svalbardmiljøloven
-	'LVO':   u'Landskapsvernområde',
-	'LVOD':  u'Landskapsvernområde med dyrelivsfredning',
-	'LVOPD': u'Landskapsvernområde med plante- og dyrelivsfredning',
-	'LVODP': u'Landskapsvernområde med dyre- og plantelivsfredning',  # typo?
-	'LVOP':  u'Landskapsvernområde med plantelivsfredning',
-	'MAVA':  u'Marint verneområde',  # annet lovverk
-	'MAV':   u'Marint verneområde',  # naturmangfoldloven
+	'LVO':   u'Landskapsvernområde',
+	'LVOD':  u'Landskapsvernområde med dyrelivsfredning',
+	'LVOPD': u'Landskapsvernområde med plante- og dyrelivsfredning',
+	'LVODP': u'Landskapsvernområde med dyre- og plantelivsfredning',  # typo?
+	'LVOP':  u'Landskapsvernområde med plantelivsfredning',
+	'MAVA':  u'Marint verneområde',  # annet lovverk
+	'MAV':   u'Marint verneområde',  # naturmangfoldloven
 	'MIV':   'Midlertidig vernet',    
 	'NP':    'Nasjonalpark',
 	'NPS':   'Nasjonalpark',  # Svalbardmiljøloven
 	'NM':    'Naturminne',
 	'NR':    'Naturreservat',
 	'NRS':   'Naturreservat',  # Svalbardmiljøloven   
-	'PDO':   u'Plante- og dyrefredningsområde',
+	'PDO':   u'Plante- og dyrefredningsområde',
 	'PD':    'Plante- og dyrelivsfredning',
-	'PO':    u'Plantefredningsområde',
+	'PO':    u'Plantefredningsområde',
 	'P':     'Plantelivsfredning'
 }
 
 
 verneplan_description = {   
 	'1':  u'Nasjonalpark',
-	'2':  u'Våtmark',
+	'2':  u'Våtmark',
 	'3':  'Myr',
 	'4':  u'Løvskog',
 	'5':  u'Sjøfugl',
@@ -516,7 +516,7 @@ if __name__ == '__main__':
 				if protect_class > 0:
 					make_osm_line ("protect_class", str(protect_class))
 
-				if protect_class == 1:
+				if protect_class in [1, 4]:
 					make_osm_line ("leisure", "nature_reserve")
 					make_osm_line ("boundary", "protected_area")
 				elif protect_class == 2:
