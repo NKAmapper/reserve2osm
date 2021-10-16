@@ -1,61 +1,76 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf8
 
 # reserve2osm
-# Converts protected areas from Miljødirektoratet to osm format for import/update
+# Converts protected areas and recreation areas ("friområder") from Miljødirektoratet to osm format for import/update
 # Usage: python reserve2osm.py [input_filename] (without .json)
 # Default output filename: [input_filename].osm
 
 
-import cgi
+import html
 import json
 import sys
 import copy
 
 
-version = "0.3.1"
+version = "0.4.0"
 
+split = True  # True for splitting polygons into network of realtions
 debug = False
 
 
+iucn_code = {
+	'strictNatureReserve':			'1a',
+	'wildernessArea':				'1b',
+	'nationalPark':					'2',
+	'naturalMonument':				'3',
+	'habitatSpeciesManagementArea':	'4',
+	'protectedLandscapeOrSeascape':	'5',
+	'managedResourceProtectedArea':	'6',
+	'ikkeVurdert':					'',
+}
+
 verneform_description = {
-	'BV':    u'Biotopvernområde',
-	'BVS':   u'Biotopvernområde',  # Svalbardmiljøloven
-	'BVV':   u'Biotopvernområde',  # etter viltloven
-	'DO':    u'Dyrefredningsområde',
-	'D':     'Dyrelivsfredning',
-	'GVS':   u'Geotopvernområde',  # Svalbardmiljøloven
-	'LVO':   u'Landskapsvernområde',
-	'LVOD':  u'Landskapsvernområde med dyrelivsfredning',
-	'LVOPD': u'Landskapsvernområde med plante- og dyrelivsfredning',
-	'LVODP': u'Landskapsvernområde med dyre- og plantelivsfredning',  # typo?
-	'LVOP':  u'Landskapsvernområde med plantelivsfredning',
-	'MAVA':  u'Marint verneområde',  # annet lovverk
-	'MAV':   u'Marint verneområde',  # naturmangfoldloven
-	'MIV':   'Midlertidig vernet',    
-	'NP':    'Nasjonalpark',
-	'NPS':   'Nasjonalpark',  # Svalbardmiljøloven
-	'NM':    'Naturminne',
-	'NR':    'Naturreservat',
-	'NRS':   'Naturreservat',  # Svalbardmiljøloven   
-	'PDO':   u'Plante- og dyrefredningsområde',
-	'PD':    'Plante- og dyrelivsfredning',
-	'PO':    u'Plantefredningsområde',
-	'P':     'Plantelivsfredning'
+	'biotopvern':									'Biotopvernområde',  # BV
+	'biotopvernSvalbard':							'Biotopvernområde',  # BVS, Svalbardmiljøloven
+	'biotopvernVilt':								'Biotopvernområde',  # BVV, etter viltloven
+	'dyrefredningsområde':							'Dyrefredningsområde', # DO
+	'dyrelivsfredning':								'Dyrelivsfredning',  # D
+	'geotopvernSvalbard':							'Geotopvernområde',  # GVS, Svalbardmiljøloven
+	'landskapsvernområde':							'Landskapsvernområde',  # LVO
+	'landskapsvernområdeBiotopvern':				'Landskapsvernområde med biotopvern',
+	'landskapsvernområdeDyrelivsfredning':			'Landskapsvernområde med dyrelivsfredning',  # LVOD
+	'landskapsvernområdePlantelivsfredning':		'Landskapsvernområde med plantelivsfredning',  # LVOP
+	'landskapsvernområdePlanteOgDyrelivsfredning':	'Landskapsvernområde med plante- og dyrelivsfredning',  # LVOPD
+#	'': 											'Landskapsvernområde med dyre- og plantelivsfredning',  # LVODP, typo?
+	'marintVerneområde':							'Marint verneområde',  # NAVA, annet lovverk
+#	'':												'Marint verneområde',  # MAV, naturmangfoldloven
+#	'':												'Midlertidig vernet',  # MIV  
+	'nasjonalpark':									'Nasjonalpark',  # NP
+	'nasjonalparkSvalbard':							'Nasjonalpark',  # NPS, Svalbardmiljøloven
+	'naturminne':									'Naturminne',    # NM
+	'naturreservat':								'Naturreservat',  # NR
+	'naturreservatJanMayen':						'Naturreservat',
+	'naturreservatSvalbard':						'Naturreservat',  # NRS, Svalbardmiljøloven
+	'plantefredningsområde':						'Plantefredningsområde',  # PO
+	'plantelivsfredning':							'Plantelivsfredning',  # P
+	'planteOgDyrefredningsområde':					'Plante- og dyrefredningsområde',  # PDO
+	'planteOgDyrelivsfredning':						'Plante- og dyrelivsfredning'  # PD
 }
 
 
 verneplan_description = {   
-	'1':  u'Nasjonalpark',
-	'2':  u'Våtmark',
-	'3':  'Myr',
-	'4':  u'Løvskog',
-	'5':  u'Sjøfugl',
-	'6':  'Skog',
-	'7':  'Marin',
-	'8':  '',  # "annet"
-	'9':  u'Kvartærgeologi',
-	'10': 'Fossiler'
+	'verneplanNasjonalpark':	'Nasjonalpark',
+	'verneplanVåtmark':			'Våtmark',
+	'verneplanMyr':				'Myr',
+	'verneplanLøvskog':			'Løvskog',
+	'verneplanSjøfugl':			'Sjøfugl',
+	'skogvern':					'Skog',
+	'marinVerneplan':			'Marin',
+	'annetVern':  				'',
+	'kvartærgeologi':			'Kvartærgeologi',
+	'fossiler':					'Fossiler',
+	'ikkeVurdert':				''
 }
 
 
@@ -80,8 +95,8 @@ def log (text):
 def make_osm_line (key,value):
 
 	if value:
-		encoded_key = cgi.escape(key.encode('utf-8'),True)
-		encoded_value = cgi.escape(value.encode('utf-8'),True).strip()
+		encoded_key = html.escape(key)
+		encoded_value = html.escape(value).strip()
 		file.write ('    <tag k="%s" v="%s" />\n' % (encoded_key, encoded_value))
 
 
@@ -166,7 +181,7 @@ def split_way (way_ref, split_position):
 	log ("  Split line 1: #%i, len %i\n" % (way_ref, len(line1)))
 	log ("  Split line 2: #%i, len %i\n" % (len(ways) - 1, len(line2)))
 
-	for ref, area in areas.iteritems():
+	for ref, area in iter(areas.items()):
 		member_index = -1
 		for area_member in area['members']:
 			member_index += 1
@@ -184,6 +199,19 @@ def split_way (way_ref, split_position):
 def process_line (ref, input_line, role):
 
 	global near_ways
+
+	# Just use polygon if not splitting into relations
+
+	if not split:
+
+		ways.append(create_way(input_line))
+		member = {
+			'way_ref': len(ways) - 1,
+			'role': role,
+		}
+		areas[ref]['members'].append(member)
+
+		return
 
 	# Identify nearby ways to limit scope of matching
 
@@ -297,6 +325,121 @@ def process_line (ref, input_line, role):
 					split_way(found_way, found_node)
 
 
+# Produce tags
+
+def tag_reserve (area):
+
+	# Name tags
+
+	short_name = area['navn'].strip()
+
+	if area["offisieltnavn"] and area['offisieltnavn'] != short_name and " " in area['offisieltnavn']:
+		name = area['offisieltnavn']
+	elif area['verneform']:
+		name = short_name + " " + verneform_description[ area['verneform'] ].lower()
+	else:
+		name = short_name
+
+	official_name = name
+
+	if name:
+		split_position = name.find(" med ")
+		if (split_position > 0) and (" med " not in short_name) and ("/" not in name):
+			name = name[0:split_position]
+
+		if area['verneplan'] == "verneplanSjøfugl":
+			name.replace("dyr", "fugl")
+
+	make_osm_line ("name", name.replace("/", " / ").replace("  ", " "))
+
+	if short_name and short_name != name:
+		make_osm_line ("short_name", short_name.replace("/", " / ").replace("  ", " "))
+
+	if official_name and (official_name != name):
+		make_osm_line ("official_name", official_name.replace("/", " / ").replace("  ", " "))
+
+	# Other tags of area
+
+	make_osm_line ("naturbase:iid", area['identifikasjon_lokalid'])
+	make_osm_line ("naturbase:url", area['faktaark'])
+	make_osm_line ("related_law", area['verneforskrift'])
+	make_osm_line ("start_date", "%s-%s-%s" % (area['vernedato'][0:4], area['vernedato'][4:6], area['vernedato'][6:8]))
+
+	if area['forvaltningsmyndighet']:
+		make_osm_line ("operator", area['forvaltningsmyndighet'].replace("  ", " "))
+
+	# Type of protected area
+
+	protect_class = ""
+
+	if area['iucn']:
+		protect_class = iucn_code[ area['iucn'] ]
+	
+	if not protect_class and area['verneform']:
+		verneform = area['verneform'].lower()
+		if "naturreservat" in verneform:
+			protect_class = "1a"
+		elif "naturminne" in verneform:
+			protect_class = "3"
+		elif "fredning" in verneform or "biotop" in verneform:
+			protect_class = "4"
+
+	if protect_class:
+		make_osm_line ("protect_class", protect_class)
+
+	if protect_class in ["1a", "1b", "4"]:
+		make_osm_line ("leisure", "nature_reserve")
+		make_osm_line ("boundary", "protected_area")
+	elif protect_class == "2":
+		make_osm_line ("boundary", "national_park")
+#		if not relation:
+#			make_osm_line ("area", "yes")  # For rendering. Not needed since 2020
+	else:
+		make_osm_line ("boundary", "protected_area")
+
+	if area['verneform'] and area['verneform'] in verneform_description:
+		make_osm_line ("naturbase:verneform", verneform_description[ area['verneform'] ])
+
+	if area['verneplan'] and area['verneplan'] in verneplan_description:
+		make_osm_line ("naturbase:verneplan", verneplan_description[ area['verneplan'] ])
+
+	# Notify if coding is not known
+
+	if area['iucn'] and area['iucn'] not in iucn_code:
+		message ("\t*** IUCN code not known: %s\n" % area['iucn'])
+	if area['verneplan'] and area['verneplan'] not in verneplan_description:
+		message ("\t*** Verneplan not known: %s\n" % area['verneplan'])
+	if area['verneform'] and area['verneform'] not in verneform_description:
+		message ("\t*** Verneform not known: %s\n" % area['verneform'])
+
+	# Provide debug information
+
+	if debug:
+		if area['iucn']:
+			make_osm_line ("IUCN", area['iucn'])
+		if area['verneform']:
+			make_osm_line ("VERNEFORM", area['verneform'])
+		if area['verneplan']:
+			make_osm_line ("VERNEPLAN", area['verneplan'])
+		if area['navn']:
+			make_osm_line ("NAVN", area['navn'])
+		if area['offisieltnavn']:
+			make_osm_line ("OFFISIELTNAVN", area['offisieltnavn'])
+
+# Produce leisure area tags
+
+def tag_leisure (area):
+
+	make_osm_line ("boundary", "protected_area")
+	make_osm_line ("protect_class", "21")
+	make_osm_line ("naturbase:iid", area['identifikasjon_lokalid'])
+	make_osm_line ("naturbase:url", area['faktaark'])
+
+#	for key, value in iter(area.items()):
+#		if key != "members":
+#			make_osm_line(key, value)
+
+
 # Main program
 
 if __name__ == '__main__':
@@ -304,12 +447,12 @@ if __name__ == '__main__':
 	# Load all protected areas
 
 	message ("\nConverting Naturbase protected areas to OSM file\n")
-	message ("Reading data ...")
-
-	filename = 'Naturvernomr_2019-05-20'
+	message ("Loading data ...")
 	
 	if len(sys.argv) > 1:
-		filename = sys.argv[1]
+		filename = sys.argv[1].replace(".geojson", "").replace(".json", "")
+	else:
+		sys.exit("No input filename provided\n")
 
 	file = open(filename + ".json")
 	area_data = json.load(file)
@@ -319,8 +462,9 @@ if __name__ == '__main__':
 
 	total_objects = 0
 	for area in area_data['features']:
-		if area['properties']['objekttype'] == u"Naturvernområde":
+		if area['properties']['objtype'] in ["Naturvernområde", "SikraFriluftslivsområde"]:
 			total_objects += 1
+
 	message (" %s polygons\n" % total_objects)
 
 	if debug:
@@ -338,7 +482,7 @@ if __name__ == '__main__':
 	for area in area_data['features']:
 		info = area['properties']
 
-		if info['objekttype'] == u"Naturvernområde" and count_areas < 20000:
+		if info['objtype']in ["Naturvernområde", "SikraFriluftslivsområde"] and count_areas < 20000:
 			total_objects -= 1
 			message ("\r%i " % total_objects)
 			polygon = area['geometry']['coordinates'][0]
@@ -346,13 +490,13 @@ if __name__ == '__main__':
 			# Avoid circles
 
 			if not((len(polygon) == 41) and (polygon[10][1] - polygon[30][1] < 0.000180) and (polygon[10][1] - polygon[30][1] > 0.000176)):
-				ref = info['ident_lokalid']
+				ref = info['identifikasjon_lokalid']
 
 				if not(ref in areas):
 					areas[ref] = copy.deepcopy(area['properties'])
 					areas[ref]['members'] = []
 					count_areas += 1
-					log ("\n\nArea: %s %s\n" % (ref, info['navn']))
+					log ("\n\nArea: %s \n" % ref)
 
 				process_line (ref, polygon, "outer")
 
@@ -363,24 +507,28 @@ if __name__ == '__main__':
 
 	# Produce OSM file header
 
-	message ("Writing to file '%s.osm' ... " % filename)
+	message ("Writing to file '%s.osm' ...\n" % filename)
 
 	file = open (filename + ".osm", "w")
 	file.write ('<?xml version="1.0" encoding="UTF-8"?>\n')
 	file.write ('<osm version="0.6" generator="reserve2osm v%s" upload="false">\n' % version)
 
 	node_id = -1000
+	count = count_areas
 
 	# Iterate all areas and produce OSM file
 	# First all areas consisting of exactly one close way (no relation), then relations including all national parks
 
 	for batch in [False, True]:
 
-		for ref, area in areas.iteritems():
+		for ref, area in iter(areas.items()):
 
 			relation = (len(area['members']) > 1)
 
 			if relation == batch:
+
+				count -= 1
+				message ("\r%i " % count)
 
 				for member in area['members']:
 					way_ref = member['way_ref']
@@ -456,81 +604,10 @@ if __name__ == '__main__':
 					file.write ('  <way id="%i">\n' % node_id)
 					ways[ area['members'][0]['way_ref'] ]['way_id'] = node_id
 
-				# Name tags
-
-				short_name = area['navn'].replace("nasjonalpark", "").replace("naturreservat", "").replace("fuglereservat", "").strip()
-
-				if (area["offisieltnavn"] != "") and not(area["offisieltnavn"] is None):
-					name = area['offisieltnavn'].replace("/", " / ").replace("  ", " ")
-				elif area['verneform']:
-					name = short_name + " " + verneform_description[area['verneform']].lower()
-				else:
-					name = ""
-
-				official_name = name
-
-				if name:
-					split_position = name.find(" med ")
-					if (split_position > 0) and (" med " not in short_name) and ("/" not in name):
-						name = name[0:split_position]
-
-					if area['vern_verneplan'] == "5":  # Sjøfugl
-						name.replace("dyr", "fugl")
-
-				make_osm_line ("short_name", short_name)
-				make_osm_line ("name", name)
-
-				if official_name and (official_name != name):
-					make_osm_line ("official_name", official_name)
-
-				if debug and (area["offisieltnavn"] != "") and not(area["offisieltnavn"] is None):
-					make_osm_line ("ORIGINAL_NAME", area['offisieltnavn'])
-
-				# Other tags of area
-
-				make_osm_line ("naturbase:iid", area['ident_lokalid'])
-				make_osm_line ("naturbase:url", area['faktaark'])
-				make_osm_line ("related_law", area['verneforskrift'])
-				make_osm_line ("start_date", "%s-%s-%s" % (area['vernedato'][0:4], area['vernedato'][4:6], area['vernedato'][6:8]))
-
-				if area['forv_mynd']:
-					make_osm_line ("operator", area['forv_mynd'].replace("  ", " "))
-
-				# Type of protected area
-
-				if area['iucn']:
-					if area['iucn'] == "1":
-						protect_class = 1
-					else:
-						protect_class = int(area['iucn']) - 1
-				else:
-					if "NR" in area['verneform']:  # naturreservat
-						protect_class = 1
-					elif "NM" in area['verneform']:  # naturminne
-						protect_class = 3
-					elif ("D" in area['verneform']) or ("P" in area['verneform']):  # dyr, plante
-						protect_class = 4
-					else:
-						protect_class = 0
-
-				if protect_class > 0:
-					make_osm_line ("protect_class", str(protect_class))
-
-				if protect_class in [1, 4]:
-					make_osm_line ("leisure", "nature_reserve")
-					make_osm_line ("boundary", "protected_area")
-				elif protect_class == 2:
-					make_osm_line ("boundary", "national_park")
-					if not relation:
-						make_osm_line ("area", "yes")  # For rendering
-				else:
-					make_osm_line ("boundary", "protected_area")
-
-				if area['verneform']:
-					make_osm_line ("naturbase:verneform", area['verneform'] + " - " + verneform_description[area['verneform']])
-
-				if area['vern_verneplan']:
-					make_osm_line ("naturbase:verneplan", verneplan_description[area['vern_verneplan']])
+				if area['objtype'] == "Naturvernområde":
+					tag_reserve (area)
+				elif area['objtype'] == "SikraFriluftslivsområde":
+					tag_leisure (area)
 
 				# End section of area
 
