@@ -13,7 +13,7 @@ import sys
 import copy
 
 
-version = "0.4.0"
+version = "0.5.0"
 
 split = True  # True for splitting polygons into network of realtions
 debug = False
@@ -348,19 +348,19 @@ def tag_reserve (area):
 			name = name[0:split_position]
 
 		if area['verneplan'] == "verneplanSjøfugl":
-			name.replace("dyr", "fugl")
+			name = name.replace("dyr", "fugl")
 
 	make_osm_line ("name", name.replace("/", " / ").replace("  ", " "))
 
 	if short_name and short_name != name:
 		make_osm_line ("short_name", short_name.replace("/", " / ").replace("  ", " "))
 
-	if official_name and (official_name != name):
+	if official_name and official_name != name:
 		make_osm_line ("official_name", official_name.replace("/", " / ").replace("  ", " "))
 
 	# Other tags of area
 
-	make_osm_line ("naturbase:iid", area['identifikasjon_lokalid'])
+	make_osm_line ("ref:naturvern", area['identifikasjon_lokalid'])
 	make_osm_line ("naturbase:url", area['faktaark'])
 	make_osm_line ("related_law", area['verneforskrift'])
 	make_osm_line ("start_date", "%s-%s-%s" % (area['vernedato'][0:4], area['vernedato'][4:6], area['vernedato'][6:8]))
@@ -403,6 +403,8 @@ def tag_reserve (area):
 	if area['verneplan'] and area['verneplan'] in verneplan_description:
 		make_osm_line ("naturbase:verneplan", verneplan_description[ area['verneplan'] ])
 
+	make_osm_line ("KOMMUNE", area['kommnr'])
+
 	# Notify if coding is not known
 
 	if area['iucn'] and area['iucn'] not in iucn_code:
@@ -432,8 +434,11 @@ def tag_leisure (area):
 
 	make_osm_line ("boundary", "protected_area")
 	make_osm_line ("protect_class", "21")
-	make_osm_line ("naturbase:iid", area['identifikasjon_lokalid'])
+	make_osm_line ("ref:friluft", area['identifikasjon_lokalid'])
 	make_osm_line ("naturbase:url", area['faktaark'])
+	make_osm_line ("name", area['omradenavn'])
+	make_osm_line ("BESKRIVELSE", area['omraadebeskrivelse'])
+	make_osm_line ("KOMMUNE", area['kommnr'])
 
 #	for key, value in iter(area.items()):
 #		if key != "members":
@@ -462,7 +467,11 @@ if __name__ == '__main__':
 
 	total_objects = 0
 	for area in area_data['features']:
-		if area['properties']['objtype'] in ["Naturvernområde", "SikraFriluftslivsområde"]:
+		if "objtype" in area['properties']:
+			area['properties']['objekttype'] = area['properties']['objtype']
+		elif "objekktype" in area['properties']:
+			area['properties']['objekttype'] = area['properties']['objekktype']
+		if area['properties']['objekttype'] in ["Naturvernområde", "SikraFriluftslivsområde"]:
 			total_objects += 1
 
 	message (" %s polygons\n" % total_objects)
@@ -482,14 +491,22 @@ if __name__ == '__main__':
 	for area in area_data['features']:
 		info = area['properties']
 
-		if info['objtype']in ["Naturvernområde", "SikraFriluftslivsområde"] and count_areas < 20000:
+		if info['objekttype']in ["Naturvernområde", "SikraFriluftslivsområde"] and count_areas < 20000:
 			total_objects -= 1
 			message ("\r%i " % total_objects)
-			polygon = area['geometry']['coordinates'][0]
+			if area['geometry']['type'] == "MultiPolygon":
+				outer_polygon = area['geometry']['coordinates'][0]
+				inner_polygon = area['geometry']['coordinates'][1]
+			else:
+				outer_polygon = [ area['geometry']['coordinates'][0] ]
+				inner_polygon = area['geometry']['coordinates'][1:]
 
 			# Avoid circles
 
-			if not((len(polygon) == 41) and (polygon[10][1] - polygon[30][1] < 0.000180) and (polygon[10][1] - polygon[30][1] > 0.000176)):
+			if not((len(outer_polygon[0]) == 41) and \
+					(outer_polygon[0][10][1] - outer_polygon[0][30][1] < 0.000180) and  \
+					(outer_polygon[0][10][1] - outer_polygon[0][30][1] > 0.000176)):
+
 				ref = info['identifikasjon_lokalid']
 
 				if not(ref in areas):
@@ -498,9 +515,10 @@ if __name__ == '__main__':
 					count_areas += 1
 					log ("\n\nArea: %s \n" % ref)
 
-				process_line (ref, polygon, "outer")
+				for polygon in outer_polygon:
+					process_line (ref, polygon, "outer")
 
-				for polygon in area['geometry']['coordinates'][1:]:
+				for polygon in inner_polygon:
 					process_line (ref, polygon, "inner")
 
 	message ("\r%i protected areas, %i ways\n" % (count_areas, len(ways)))
@@ -598,15 +616,15 @@ if __name__ == '__main__':
 				node_id -= 1
 				if relation:
 					file.write ('  <relation id="%i" >\n' % node_id)
-					make_osm_line ("type", "multipolygon")
+					make_osm_line ("type", "boundary")
 
 				else:
 					file.write ('  <way id="%i">\n' % node_id)
 					ways[ area['members'][0]['way_ref'] ]['way_id'] = node_id
 
-				if area['objtype'] == "Naturvernområde":
+				if area['objekttype'] == "Naturvernområde":
 					tag_reserve (area)
-				elif area['objtype'] == "SikraFriluftslivsområde":
+				elif area['objekttype'] == "SikraFriluftslivsområde":
 					tag_leisure (area)
 
 				# End section of area
