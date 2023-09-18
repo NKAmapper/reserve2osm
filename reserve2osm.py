@@ -11,67 +11,81 @@ import html
 import json
 import sys
 import copy
+import math
+import urllib.request
+import time
+from datetime import datetime
+from xml.etree import ElementTree as ET
 
 
-version = "0.5.0"
+version = "2.0.0"
 
-split = True  # True for splitting polygons into network of realtions
-debug = False
+split = True 			# True for splitting polygons into network of realtions
+geojson = False			# Output raw data in geojson file
+debug = False			# Add a few extra tags
+simplify = True 		# Simplify lines before output (less nodes)
+simplify_factor = 0.2	# For reducing number of nodes
+max_load = 10000		# Max features to load (per 1000), for debugging
 
+# Avoid merging the following protected areas which have messy boundaries
+no_merge_areas = [
+	"VV00003632",		# Ytre Karlsøy marine verneområde
+	"VV00001227"		# Bratthagen naturminne
+] 
 
 iucn_code = {
-	'strictNatureReserve':			'1a',
-	'wildernessArea':				'1b',
-	'nationalPark':					'2',
-	'naturalMonument':				'3',
-	'habitatSpeciesManagementArea':	'4',
-	'protectedLandscapeOrSeascape':	'5',
-	'managedResourceProtectedArea':	'6',
-	'ikkeVurdert':					'',
+	'IUCN_IA':		'1a',
+	'IUCN_IB':		'1b',
+	'IUCN_II':		'2',
+	'IUCN_III':		'3',
+	'IUCN_IV':		'4',
+	'IUCN_V':		'5',
+	'IUCN_VI':		'6',
+	'IkkeVurdert': 	''
 }
 
 verneform_description = {
-	'biotopvern':									'Biotopvernområde',  # BV
-	'biotopvernSvalbard':							'Biotopvernområde',  # BVS, Svalbardmiljøloven
-	'biotopvernVilt':								'Biotopvernområde',  # BVV, etter viltloven
-	'dyrefredningsområde':							'Dyrefredningsområde', # DO
-	'dyrelivsfredning':								'Dyrelivsfredning',  # D
-	'geotopvernSvalbard':							'Geotopvernområde',  # GVS, Svalbardmiljøloven
-	'landskapsvernområde':							'Landskapsvernområde',  # LVO
-	'landskapsvernområdeBiotopvern':				'Landskapsvernområde med biotopvern',
-	'landskapsvernområdeDyrelivsfredning':			'Landskapsvernområde med dyrelivsfredning',  # LVOD
-	'landskapsvernområdePlantelivsfredning':		'Landskapsvernområde med plantelivsfredning',  # LVOP
-	'landskapsvernområdePlanteOgDyrelivsfredning':	'Landskapsvernområde med plante- og dyrelivsfredning',  # LVOPD
+	'Biotopvern':									'Biotopvernområde',  # BV
+	'BiotopvernSvalbard':							'Biotopvernområde',  # BVS, Svalbardmiljøloven
+	'BiotopvernVilt':								'Biotopvernområde',  # BVV, etter viltloven
+	'Dyrefredningsomrade':							'Dyrefredningsområde', # DO
+	'Dyrelivsfredning':								'Dyrelivsfredning',  # D
+	'GeotopvernSvalbard':							'Geotopvernområde',  # GVS, Svalbardmiljøloven
+	'Landskapsvernomraade':							'Landskapsvernområde',  # LVO
+	'LandskapsvernomraadeBiotopvern':				'Landskapsvernområde med biotopvern',
+	'LandskapsvernomraadeDyrelivsfredning':			'Landskapsvernområde med dyrelivsfredning',  # LVOD
+	'LandskapsvernomraadePlantelivsfredning':		'Landskapsvernområde med plantelivsfredning',  # LVOP
+	'LandskapsvernomraadePlanteOgDyrelivsfredning':	'Landskapsvernområde med plante- og dyrelivsfredning',  # LVOPD
 #	'': 											'Landskapsvernområde med dyre- og plantelivsfredning',  # LVODP, typo?
-	'marintVerneområde':							'Marint verneområde',  # NAVA, annet lovverk
+	'MarintVerneomraade':							'Marint verneområde',  # NAVA, annet lovverk
 #	'':												'Marint verneområde',  # MAV, naturmangfoldloven
 #	'':												'Midlertidig vernet',  # MIV  
-	'nasjonalpark':									'Nasjonalpark',  # NP
-	'nasjonalparkSvalbard':							'Nasjonalpark',  # NPS, Svalbardmiljøloven
-	'naturminne':									'Naturminne',    # NM
-	'naturreservat':								'Naturreservat',  # NR
-	'naturreservatJanMayen':						'Naturreservat',
-	'naturreservatSvalbard':						'Naturreservat',  # NRS, Svalbardmiljøloven
-	'plantefredningsområde':						'Plantefredningsområde',  # PO
-	'plantelivsfredning':							'Plantelivsfredning',  # P
-	'planteOgDyrefredningsområde':					'Plante- og dyrefredningsområde',  # PDO
-	'planteOgDyrelivsfredning':						'Plante- og dyrelivsfredning'  # PD
+	'Nasjonalpark':									'Nasjonalpark',  # NP
+	'NasjonalparkSvalbard':							'Nasjonalpark',  # NPS, Svalbardmiljøloven
+	'Naturminne':									'Naturminne',    # NM
+	'Naturreservat':								'Naturreservat',  # NR
+	'NaturreservatJanMayen':						'Naturreservat',
+	'NaturreservatSvalbard':						'Naturreservat',  # NRS, Svalbardmiljøloven
+	'Plantefredningsomraade':						'Plantefredningsområde',  # PO
+	'Plantelivsfredning':							'Plantelivsfredning',  # P
+	'PlanteOgDyrefredningsomraade':					'Plante- og dyrefredningsområde',  # PDO
+	'PlanteOgDyrelivsfredning':						'Plante- og dyrelivsfredning'  # PD
 }
-
 
 verneplan_description = {   
-	'verneplanNasjonalpark':	'Nasjonalpark',
-	'verneplanVåtmark':			'Våtmark',
-	'verneplanMyr':				'Myr',
-	'verneplanLøvskog':			'Løvskog',
-	'verneplanSjøfugl':			'Sjøfugl',
-	'skogvern':					'Skog',
-	'marinVerneplan':			'Marin',
-	'annetVern':  				'',
-	'kvartærgeologi':			'Kvartærgeologi',
-	'fossiler':					'Fossiler',
-	'ikkeVurdert':				''
+	'VerneplanNasjonalpark':	'Nasjonalpark',
+	'VerneplanVatmark':			'Våtmark',
+	'VerneplanMyr':				'Myr',
+	'VerneplanLoevskog':		'Løvskog',
+	'VerneplanSjoefugl':		'Sjøfugl',
+	'Skogvern':					'Skog',
+	'MarinVerneplan':			'Marin',
+	'AnnetVern':  				'',
+	'Kvartaergeologi':			'Kvartærgeologi',
+	'Fossiler':					'Fossiler',
+	'IkkeVurdert':				''
 }
+
 
 
 # Output message
@@ -82,367 +96,690 @@ def message (line):
 	sys.stdout.flush()
 
 
-# Log file
 
-def log (text):
+# Compute closest distance from point p3 to line segment [s1, s2].
+# Works for short distances.
 
-	if debug:
-		logfile.write(text.encode('utf-8'))
+def line_distance(s1, s2, p3):
+
+	x1, y1, x2, y2, x3, y3 = map(math.radians, [s1[0], s1[1], s2[0], s2[1], p3[0], p3[1]])  # Note: (x,y)
+
+	# Simplified reprojection of latitude
+	x1 = x1 * math.cos( y1 )
+	x2 = x2 * math.cos( y2 )
+	x3 = x3 * math.cos( y3 )
+
+	A = x3 - x1
+	B = y3 - y1
+	dx = x2 - x1
+	dy = y2 - y1
+
+	dot = (x3 - x1)*dx + (y3 - y1)*dy
+	len_sq = dx*dx + dy*dy
+
+	if len_sq != 0:  # in case of zero length line
+		param = dot / len_sq
+	else:
+		param = -1
+
+	if param < 0:
+		x4 = x1
+		y4 = y1
+	elif param > 1:
+		x4 = x2
+		y4 = y2
+	else:
+		x4 = x1 + param * dx
+		y4 = y1 + param * dy
+
+	# Also compute distance from p to segment
+
+	x = x4 - x3
+	y = y4 - y3
+	distance = 6371000 * math.sqrt( x*x + y*y )  # In meters
+
+	'''
+	# Project back to longitude/latitude
+
+	x4 = x4 / math.cos(y4)
+
+	lon = math.degrees(x4)
+	lat = math.degrees(y4)
+
+	return (lon, lat, distance)
+	'''
+
+	return distance
 
 
-# Produce a tag for OSM file
 
-def make_osm_line (key,value):
+# Simplify line, i.e. reduce nodes within epsilon distance.
+# Ramer-Douglas-Peucker method: https://en.wikipedia.org/wiki/Ramer–Douglas–Peucker_algorithm
 
-	if value:
-		encoded_key = html.escape(key)
-		encoded_value = html.escape(value).strip()
-		file.write ('    <tag k="%s" v="%s" />\n' % (encoded_key, encoded_value))
+def simplify_line(line, epsilon):
 
+	dmax = 0.0
+	index = 0
+	for i in range(1, len(line) - 1):
+		d = line_distance(line[0], line[-1], line[i])
+		if d > dmax:
+			index = i
+			dmax = d
 
-# Search for start and end nodes in ways
+	if dmax >= epsilon:
+		new_line = simplify_line(line[:index+1], epsilon)[:-1] + simplify_line(line[index:], epsilon)
+	else:
+		new_line = [line[0], line[-1]]
 
-def find_node_id (coordinate):
-
-	for way in ways:
-		if ("start_node1" in way) and (coordinate[0] == way['line'][0][0]) and (coordinate[1] == way['line'][0][1]):
-			return way['start_node1']
-		if ("end_node1" in way) and (coordinate[0] == way['line'][-1][0]) and (coordinate[1] == way['line'][-1][1]):
-			return way['end_node1']
-
-	return None
-
-
-# Search for node in nearby ways
-
-def find_node (coordinate_query):
-
-	global near_ways
-
-	for way in near_ways:
-		index = -1
-
-		for coordinate in ways[way]['line']:
-			index += 1
-
-			if (coordinate[0] == coordinate_query[0]) and (coordinate[1] == coordinate_query[1]):
-				log ("Found way #%i, node %i\n" % (way, index))
-				return (way, index)
-
-	return (None, None)
+	return new_line
 
 
-# Create new way dict, including bounding box
 
-def create_way (line):
+# Produce tags based on properties from Naturbase (info)
 
-	max_lat = line[0][1]
-	min_lat = line[0][1]	
-	max_lon = line[0][0]
-	min_lon = line[0][0]
+def get_tags(info):
 
-	for coordinate in line[1:]:
-		max_lat = max(max_lat, coordinate[1])
-		min_lat = min(min_lat, coordinate[1])
-		max_lon = max(max_lon, coordinate[0])
-		min_lon = min(min_lon, coordinate[0])
+	tags = {}
+
+	if datatype == "naturvern":  # Tag nature reserves
+
+		# Name tags
+
+		short_name = info['navn'].strip()
+
+		if info["offisieltNavn"] and info['offisieltNavn'] != short_name and " " in info['offisieltNavn']:
+			name = info['offisieltNavn']
+		elif info['verneform']:
+			name = short_name + " " + verneform_description[ info['verneform'] ].lower()
+		else:
+			name = short_name
+
+		official_name = name
+
+		if name:
+			split_position = name.find(" med ")
+			if (split_position > 0) and (" med " not in short_name) and ("/" not in name):
+				name = name[0:split_position]
+
+			if info['verneplan'] == "VerneplanSjoefugl":
+				name = name.replace("dyr", "fugl")
+
+		tags['name'] = name.replace("/", " / ").replace("  ", " ")
+
+		if short_name and short_name != name:
+			tags['short_name'] = short_name.replace("/", " / ").replace("  ", " ")
+
+		if official_name and official_name != name:
+			tags['official_name'] = official_name.replace("/", " / ").replace("  ", " ")
+
+		# Other tags of area
+
+		tags['ref:naturvern'] = info['naturvernId']
+		tags['naturbase:url'] = info['faktaark']
+		tags['related_law'] = info['verneforskrift']
+
+		if info['vernedato']:
+			tags['start_date'] = datetime.fromtimestamp(info['vernedato'] / 1000).isoformat()[:10]  # Milliseconds
+
+		if info['forvaltningsmyndighet']:
+			tags['operator'] = info['forvaltningsmyndighet'].replace("  ", " ")
+
+		# Type of protected area
+
+		protect_class = ""
+
+		if info['iucn']:
+			protect_class = iucn_code[ info['iucn'] ]
+		
+		if not protect_class and info['verneform']:
+			verneform = info['verneform'].lower()
+			if "naturreservat" in verneform:
+				protect_class = "1a"
+			elif "naturminne" in verneform:
+				protect_class = "3"
+			elif "fredning" in verneform or "biotop" in verneform:
+				protect_class = "4"
+
+		if protect_class:
+			tags['protect_class'] = protect_class
+
+		if protect_class in ["1a", "1b", "4"]:
+			tags['leisure'] = "nature_reserve"
+			tags['boundary'] = "protected_area"
+		elif protect_class == "2":
+			tags['boundary'] = "national_park"
+		else:
+			tags['boundary'] = "protected_area"
+
+		if info['verneform'] and info['verneform'] in verneform_description:
+			tags['naturbase:verneform'] = verneform_description[ info['verneform'] ]
+
+		if info['verneplan'] and info['verneplan'] in verneplan_description:
+			tags['naturbase:verneplan'] = verneplan_description[ info['verneplan'] ]
+
+		tags['KOMMUNE'] = info['kommune'].replace(",", ", ")
+
+		# Notify if coding is not known
+
+		if info['iucn'] and info['iucn'] not in iucn_code:
+			message ("\t*** IUCN code not known: %s\n" % info['iucn'])
+		if info['verneplan'] and info['verneplan'] not in verneplan_description:
+			message ("\t*** Verneplan not known: %s\n" % info['verneplan'])
+		if info['verneform'] and info['verneform'] not in verneform_description:
+			message ("\t*** Verneform not known: %s\n" % info['verneform'])
+
+		# Provide debug information
+
+		if debug:
+			if info['iucn']:
+				tags['IUCN'] = info['iucn']
+			if info['verneform']:
+				tags['VERNEFORM'] = info['verneform']
+			if info['verneplan']:
+				tags['VERNEPLAN'] = info['verneplan']
+			if info['navn']:
+				tags['NAVN'] = info['navn']
+			if info['offisieltNavn']:
+				tags['OFFISIELTNAVN'] = info['offisieltNavn']
+
+	else:  # Tag protected leisure areas
+
+		tags['boundary'] = "protected_area"
+		tags['protect_class'] = "21"
+		tags['ref:friluft'] = info['friluftId']
+		tags['naturbase:url'] = info['faktaark']
+		tags['name'] = info['omraadeNavn']
+		tags['BESKRIVELSE'] = info['omraadeBeskrivelse']
+
+	# Check for empty tags
+
+	for key in list(tags.keys()):
+		if tags[key] == "" or tags[key] is None:
+			del tags[key]
+
+	return tags
+
+
+
+# Create member record
+
+def get_member(way_ref, role):
+
+	member = {
+		'way_ref': way_ref,
+		'role': role			
+	}
+	return member
+
+
+
+# Create new way record, including bbox
+
+def create_way(line):
 
 	new_way = {
-		'line':    line,
-		'max_lat': max_lat,
-		'min_lat': min_lat,
-		'max_lon': max_lon,
-		'min_lon': min_lon
+		'line': line,
+		'bbox_min': [0,0],
+		'bbox_max': [0,0]
 	}
+
+	for i in [0, 1]:
+		new_way['bbox_min'][i] = min(point[i] for point in line)
+		new_way['bbox_max'][i] = max(point[i] for point in line)
 
 	return new_way
 
 
-# Split way at given position
-# Add the new segment at the end of ways list and add to nearby ways
 
-def split_way (way_ref, split_position):
+# Decompose outer/inner polygon into way segments
 
-	global near_ways
+def process_polygon(ref, input_polygon, role):
 
-	log ("Split line old: #%i, len %i, pos %i \n" % (way_ref, len(ways[way_ref]['line']), split_position))
+	polygon = [ (point[0], point[1]) for point in input_polygon ]
 
-	line1 = ways[way_ref]['line'][0:split_position + 1]
-	line2 = ways[way_ref]['line'][split_position:]
+	# Skip matching if blacklisted
 
-	new_way = create_way(line1)
-	ways[way_ref] = new_way
-
-	new_way = create_way(line2)
-	ways.append(new_way)
-
-	near_ways.append(len(ways) - 1)
-
-	log ("  Split line 1: #%i, len %i\n" % (way_ref, len(line1)))
-	log ("  Split line 2: #%i, len %i\n" % (len(ways) - 1, len(line2)))
-
-	for ref, area in iter(areas.items()):
-		member_index = -1
-		for area_member in area['members']:
-			member_index += 1
-			if area_member['way_ref'] == way_ref:
-				member = {
-					'way_ref': len(ways) - 1,
-					'role': area_member['role']
-				}
-				areas[ref]['members'].insert(member_index + 1, member)
-				break
-
-
-# Add new line to ways, including identifying and splitting existing ways
-
-def process_line (ref, input_line, role):
-
-	global near_ways
-
-	# Just use polygon if not splitting into relations
-
-	if not split:
-
-		ways.append(create_way(input_line))
-		member = {
-			'way_ref': len(ways) - 1,
-			'role': role,
-		}
-		areas[ref]['members'].append(member)
-
+	if not split or ref in no_merge_areas:
+		ways.append(create_way(polygon))
+		areas[ref]['members'].append(get_member(len(ways) - 1, role))
+		ways[-1]['nomerge'] = True
 		return
 
-	# Identify nearby ways to limit scope of matching
+	# Build list of ways intersecting with polygon to speed up matching
 
-	input_way = create_way (input_line)
+	input_way = create_way(polygon)
+	polygon_set = set(polygon)
 	near_ways = []
-	way_index = -1
+
+	for way_ref, way in enumerate(ways):
+		if (way['bbox_max'][0] >= input_way['bbox_min'][0] and way['bbox_min'][0] <= input_way['bbox_max'][0]
+				and way['bbox_max'][1] >= input_way['bbox_min'][1] and way['bbox_min'][1] <= input_way['bbox_max'][1]
+				and "nomerge" not in way
+				and len(polygon_set.intersection(way['line'])) > 0):  # Even for one node (touching rings)
+			near_ways.append(way_ref)
+
+	# Create new way if no matching ways
+
+#	if not near_ways:
+#		ways.append(create_way(polygon))
+#		areas[ref]['members'].append(get_member(len(ways) - 1, role))
+#		return		
+
+	# Loop intersecting ways and split/match
+
+	junctions = set()
+	match_ways = []
+
+	for way_ref in near_ways:
+		way = ways[ way_ref ]
+		way_line = way['line']
+		way_set = set(way['line'])
+
+		# Quick exit for exact match
+
+		if way_set == polygon_set:
+			areas[ ref ]['members'].append(get_member(way_ref, role))
+			return
+
+		# Discover junctions
+
+		for i in range(1, len(polygon) - 1):
+			if polygon[i] in way_set and (polygon[i-1] not in way_set or polygon[i+1] not in way_set):
+				junctions.add(polygon[i])
+
+		for i in range(1, len(way_line) - 1):
+			if way_line[i] in polygon_set and (way_line[i-1] not in polygon_set or way_line[i+1] not in polygon_set):
+				junctions.add(way_line[i])			
+
+		if not junctions:
+			continue  # No match
+
+		for i in [0,-1]:
+			junctions.add(polygon[i])
+			junctions.add(way_line[i])
+
+		# Split way at each junction
+
+		way_refs = []
+		remaining_line = way_line.copy()
+
+		while remaining_line:
+			new_line = [ remaining_line.pop(0) ]
+			while remaining_line and remaining_line[0] not in junctions:
+				new_line.append(remaining_line.pop(0))
+
+			if remaining_line:
+				new_line.append(remaining_line[0])
+
+			if len(new_line) > 1 :
+				if not way_refs:
+					way['line'] = new_line
+					way_refs.append(way_ref)
+				else:
+					ways.append(create_way(new_line))
+					way_refs.append(len(ways) - 1)
+
+				if len(polygon_set.intersection(new_line)) > 1:
+					match_ways.append(way_refs[-1])
+
+		# Update members which already refer to way
+
+		if len(way_refs) > 1:
+			for area in areas.values():
+				for i, member in enumerate(area['members']):
+					if member['way_ref'] == way_ref:
+						new_members = []
+						for member_ref in way_refs:
+							new_members.append(get_member(member_ref, member['role']))
+						area['members'][i:i+1] = new_members
+						break
+
+	# Add self-intersecting junctions for polygon
+
+	polygon_set = set([polygon[0], polygon[-1]])
+	for node in polygon[1:-1]:
+		if node in polygon_set:
+			junctions.add(node)
+		polygon_set.add(node)
+
+	# Split polygon at junctions
+
+	segments = []
+	remaining_line = polygon.copy()
+
+	while remaining_line:
+		new_line = [ remaining_line.pop(0) ]
+		while remaining_line and remaining_line[0] not in junctions:
+			new_line.append(remaining_line.pop(0))
+
+		if remaining_line:
+			new_line.append(remaining_line[0])
+
+		if len(new_line) > 1 and not(len(new_line) == 2 and new_line[0] == new_line[-1]):
+			segments.append(new_line)
+
+	# Match polygon segments with ways, or create new ways if no match
+
+	way_refs = []
+	for segment in segments:
+		found = False
+		for way_ref in match_ways:
+			if set(segment) == set(ways[ way_ref ]['line']):
+				areas[ ref ]['members'].append(get_member(way_ref, role))
+				match_ways.remove(way_ref)
+				found = True
+				break
+
+		if not found:
+			ways.append(create_way(segment))
+			areas[ ref ]['members'].append(get_member(len(ways) - 1, role))
+
+
+
+# Create data structure for feature and decompose line segments
+
+def process_feature (feature):
+
+	global ref_id
+
+	info = feature['properties']
+
+	if feature['geometry']['type'] == "MultiPolygon":
+		multipolygon = feature['geometry']['coordinates']
+	else:
+		multipolygon = [ feature['geometry']['coordinates'] ]
+
+	# Avoid small circles representing a point
+
+	coordinates = multipolygon[0][0]
+	if (len(coordinates) == 41
+			and coordinates[10][1] - coordinates[30][1] < 0.000180
+			and coordinates[10][1] - coordinates[30][1] > 0.000176):
+		return
+
+	# Init data structure.
+	# Areas may appear multiple times as geojson features, one for each outer area
+
+	if datatype == "geojson":
+		ref_id += 1
+		ref = ref_id
+	else:
+		ref = info[ datatype + 'Id' ]
+
+	if ref not in areas:
+		areas[ ref ] = {
+			'members': [],
+			'tags': {}
+		}
+		if datatype == "geojson":
+			for key, value in iter(info.items()):
+				if value:
+					areas[ ref ]['tags'][ key ] = str(value)
+		else:
+			areas[ ref ]['tags'] = get_tags(info)
+			if ref in no_merge_areas:
+				areas[ ref ]['tags']['NOTE'] = "Polygonet er ikke flettet med andre verneområder"
+
+	# Create way segments for polygon/multipolygon.
+	# A multipolygon is a list of polygons, each with one outer and multiple inner patches
+
+	for polygon in multipolygon:
+		process_polygon (ref, polygon[0], "outer")
+		for inner in polygon[1:]:
+			process_polygon (ref, inner, "inner")
+
+
+
+# Combine non-branching ways into longer ways
+
+def combine_ways():
+
+	# Build dict of junctions with set of all connected ways
+
+	junctions = {}
+	for way_ref, way in enumerate(ways):
+		way['parents'] = set()
+		if "nomerge" not in way:
+			for node in [ way['line'][0], way['line'][-1] ]:
+				if node not in junctions:
+					junctions[ node ] = []  # Set not used due to self-intersecting rings
+				junctions[ node ].append(way_ref)
+
+	# Build info on which areas uses each way
+
+	for area_ref, area in iter(areas.items()):
+		for member in area['members']:
+			ways[ member['way_ref'] ]['parents'].add(area_ref)
+
+	# Iterate junctions and combine if no branching (2 ways with identical parents)
+
+	count = 0
+	for node in junctions.keys():
+		junction = junctions[ node ]
+
+		if len(junction) == 2:
+			way_ref1 = list(junction)[0]
+			way_ref2 = list(junction)[1]
+
+			if way_ref1 != way_ref2 and ways[ way_ref1 ]['parents'] == ways[ way_ref2 ]['parents']:
+				line1 = ways[ way_ref1 ]['line']
+				line2 = ways[ way_ref2 ]['line']
+
+				# Connect at node position, even for ring. Ways have same direction.
+				if line1[-1] == node:
+					new_line = line1 + line2[1:]  
+				else:
+					new_line = line2 + line1[1:]
+
+				ways[ way_ref1 ]['line'] = new_line
+				ways[ way_ref2 ] = { 'delete': True }  # Mark for no later output
+				count += 1
+
+				# Swap deleted way with combined way in all relevant junctions
+				for node2 in junctions.keys():
+					while way_ref2 in junctions[ node2 ]:
+						junctions[ node2 ].remove(way_ref2)
+						junctions[ node2 ].append(way_ref1)
+
+	# Remove deleted ways from multipolygon members
+
+	for area in areas.values():
+		for member in area['members'][:]:
+			if "delete" in ways[ member['way_ref'] ]:
+				area['members'].remove(member)
+				if debug:
+					area['tags']['KOMBINERT'] = "yes"
+
+	message ("Combined %i contiguous ways\n" % count)
+
+
+
+# Simplify line geometry for all ways.
+
+def simplify_ways():
+
+	message ("Simplify geometry ...\n")
+	for way in ways:
+		if "delete" not in way and len(way['line']) > 3:
+			new_line = simplify_line(way['line'], simplify_factor)
+
+			# Avoid collapsing tiny polygons, including with two tiny segments
+			if (way['line'][0] == way['line'][-1] and len(new_line) > 3
+					or way['line'][0] != way['line'][-1] and len(new_line) > 2):
+				way['line'] = new_line
+
+
+
+# Load data from Naturbase
+
+def load_data(datatype):
+
+	if "geojson" in datatype:
+		# Open geojson file (any content)
+
+		file = open(datatype)
+		geojson_data = json.load(file)
+		file.close()
+		features.extend(geojson_data['features'])
+
+	else:
+		# Load data from Miljødirektoratet REST server
+
+		if datatype == "naturvern":
+			endpoint = "https://kart.miljodirektoratet.no/arcgis/rest/services/vern/mapserver/0/"
+		elif datatype == "friluft":
+			endpoint = "https://kart.miljodirektoratet.no/arcgis/rest/services/friluftsliv_statlig_sikra/mapserver/0/"
+		else:
+			sys.exit("Data source '%s' not known\n" % datatype)
+
+		url = endpoint + "query?where=1=1&outFields=*&geometryPrecision=7&f=geojson&resultRecordCount=1000"
+		filename = datatype.lower()
+		area_data = []
+		page_data = { 'exceededTransferLimit': True }
+		count = 0
+
+		while "exceededTransferLimit" in page_data and count < max_load:
+			request = urllib.request.Request(url + "&resultOffset=%i" % count)  # Paged data
+			file = urllib.request.urlopen(request)
+			page_data = json.load(file)
+			file.close()
+			area_data.extend(page_data['features'])
+			count += len(page_data['features'])
+
+		# Output raw data
+		if geojson:
+			file = open(filename + "_raw.geojson", "w")
+			collection = {
+				'type': 'FeatureCollection',
+				'features': area_data
+			}
+			json.dump(collection, file, indent=2, ensure_ascii=False)
+			file.close()
+
+		features.extend(area_data)
+
+
+
+# Indent XML output
+
+def indent_tree(elem, level=0):
+    i = "\n" + level*"  "
+    if len(elem):
+        if not elem.text or not elem.text.strip():
+            elem.text = i + "  "
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+        for elem in elem:
+            indent_tree(elem, level+1)
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+    else:
+        if level and (not elem.tail or not elem.tail.strip()):
+            elem.tail = i
+
+
+
+# Save osm file
+
+def output_file(filename):
+
+	message ("Save to '%s' file...\n" % filename)
+
+	osm_node_ids = {}  # Will contain osm_id of each common node
+	relation_count = 0
+	way_count = 0
+	node_count = 0
+
+	osm_root = ET.Element("osm", version="0.6", generator="reserve2osm v"+version, upload="false")
+	osm_id = -1000
+
+	# Create common nodes at intersections
 
 	for way in ways:
-		way_index += 1
-		if (way['max_lat'] > input_way['min_lat']) and (way['min_lat'] < input_way['max_lat']) and \
-			(way['max_lon'] > input_way['min_lon']) and (way['min_lon'] < input_way['max_lon']):
-			near_ways.append(way_index)
+		if "delete" not in way:
+			for node in [ way['line'][0], way['line'][-1] ]:
+				if node not in osm_node_ids:
+					osm_id -= 1
+					osm_node = ET.Element("node", id=str(osm_id), action="modify", lat=str(node[1]), lon=str(node[0]))
+					osm_root.append(osm_node)
+					osm_node_ids[ node ] = osm_id
+					node_count += 1
 
-	log ("Role: %s\n" % role)
-	log ("Line input: len %i\n" % len(input_way['line']))
-	log ("Near ways: %s\n" % str(near_ways))
+	# Create ways with remaining nodes
 
-	# Iterate new line and identify existing (sub)lines + create new (sub)lines
+	for way_ref, way in enumerate(ways):
+		if "delete" not in way:
+			osm_id -= 1
+			osm_way = ET.Element("way", id=str(osm_id), action="modify")
+			osm_root.append(osm_way)
+			way['osm_id'] = osm_id
+			way['etree'] = osm_way
+			way_count += 1
 
-	while len(input_line) > 1:
-
-		# Find existing line
-
-		near_index = -1
-		node_index = 0
-
-		while (near_index < len(near_ways) - 1) and (node_index < 1):
-			near_index += 1
-			line = ways[ near_ways[near_index] ]['line']
-			reverse = False
-			node_index = 0
-
-			while (node_index < len(line)) and (node_index < len(input_line)) and \
-				(input_line[node_index][0] == line[node_index][0]) and (input_line[node_index][1] == line[node_index][1]):
-				node_index += 1
-
-			# If not found, check reverse order
-
-			if node_index <= 1:
-				reverse = True
-				node_index = 0
-
-				while (node_index < len(line)) and (node_index < len(input_line)) and \
-					(input_line[node_index][0] == line[len(line) - node_index - 1][0]) and \
-					(input_line[node_index][1] == line[len(line) - node_index - 1][1]):
-					node_index += 1
-
-			node_index -= 1
-
-
-		# Split existing line if needed + link to line
-
-		if node_index > 0:
-
-			found_way = near_ways[near_index]
-			if node_index < len(line) - 1:
-				if not reverse:
-					split_way(found_way, node_index)
+			for node in way['line']:
+				if node in osm_node_ids:
+					osm_nd = ET.Element("nd", ref=str(osm_node_ids[ node ]))
 				else:
-					log ("Reverse\n")
-					split_way(found_way, len(line) - node_index - 1)
-					found_way = len(ways) - 1
+					osm_id -= 1
+					osm_node = ET.Element("node", id=str(osm_id), action="modify", lat=str(node[1]), lon=str(node[0]))
+					osm_root.append(osm_node)
+					osm_nd = ET.Element("nd", ref=str(osm_id))
+					node_count += 1
+				osm_way.append(osm_nd)
 
-			member = {
-				'way_ref': found_way,
-				'role': role,
-			}
-			areas[ref]['members'].append(member)
-			input_line = input_line[node_index:]
+			if debug:
+				osm_tag = ET.Element("tag", k="WAY_REF", v=str(way_ref))
+				osm_way.append(osm_tag)
+
+
+	# Create areas
+
+	for area in areas.values():
+
+		# Output way if possible to avoid relation
+		if len(area['members']) == 1:
+			way = ways[ area['members'][0]['way_ref'] ]
+			osm_area = way['etree']  # Get way for tag output below
+			way['tagged'] = True
 
 		else:
-			# Check if split needed
+			# Output relation
+			osm_id -= 1
+			osm_area = ET.Element("relation", id=str(osm_id), action="modify")
+			osm_root.append(osm_area)
+			relation_count += 1
 
-			found_way, found_node = find_node(input_line[0])
+			for member in area['members']:
+				way = ways[ member['way_ref'] ]
+				osm_member = ET.Element("member", type="way", ref=str(way['osm_id']), role=member['role'])
+				osm_area.append(osm_member)
 
-			if (found_node is not None) and (found_node > 0) and (found_node < len(ways[found_way]['line']) - 1):
-				split_way(found_way, found_node)
-
+			if datatype == "geojson":
+				osm_tag = ET.Element("tag", k="type", v="multipolygon")
 			else:
-				# Identify new line
+				osm_tag = ET.Element("tag", k="type", v="boundary")
+			osm_area.append(osm_tag)
 
-				found_node = None
-				found_way = None
-				node_index = 1
+		# Output tags
+		for key, value in iter(area['tags'].items()):
+			osm_tag = ET.Element("tag", k=key, v=value)
+			osm_area.append(osm_tag)
 
-				while (node_index < len(input_line) - 1) and (found_node is None):
-					coordinate = input_line[node_index]
+	# Add boundary tag to untagged ways
 
-					found_way, found_node = find_node(coordinate)
+	if datatype != "geojson":
+		for way in ways:
+			if "delete" not in way and "tagged" not in way:
+				osm_tag = ET.Element("tag", k="boundary", v="protected_area")
+				way['etree'].append(osm_tag)			
 
-					if found_node is None:
-						node_index += 1
+	osm_root.set("upload", "false")
+	indent_tree(osm_root)
+	osm_tree = ET.ElementTree(osm_root)
+	osm_tree.write(filename, encoding='utf-8', method='xml', xml_declaration=True)
 
-				# Create new line
+	message ("\t%i relations, %i ways, %i nodes saved\n" % (relation_count, way_count, node_count))
 
-				if node_index > 0:
-					new_way = create_way(input_line[ 0:node_index + 1 ])
-					ways.append(new_way)
-					member = {
-						'way_ref': len(ways) - 1,
-						'role': role
-					}
-					areas[ref]['members'].append(member)
-					near_ways.append(len(ways) - 1)
-					log ("New line: #%i len %s\n" % (len(ways) - 1, len(new_way['line'])))
-					input_line = input_line[node_index:]
-
-				# Split existing line
-
-				if (found_node is not None) and (found_node > 0) and (found_node < len(ways[found_way]['line']) - 1):
-					split_way(found_way, found_node)
-
-
-# Produce tags
-
-def tag_reserve (area):
-
-	# Name tags
-
-	short_name = area['navn'].strip()
-
-	if area["offisieltnavn"] and area['offisieltnavn'] != short_name and " " in area['offisieltnavn']:
-		name = area['offisieltnavn']
-	elif area['verneform']:
-		name = short_name + " " + verneform_description[ area['verneform'] ].lower()
-	else:
-		name = short_name
-
-	official_name = name
-
-	if name:
-		split_position = name.find(" med ")
-		if (split_position > 0) and (" med " not in short_name) and ("/" not in name):
-			name = name[0:split_position]
-
-		if area['verneplan'] == "verneplanSjøfugl":
-			name = name.replace("dyr", "fugl")
-
-	make_osm_line ("name", name.replace("/", " / ").replace("  ", " "))
-
-	if short_name and short_name != name:
-		make_osm_line ("short_name", short_name.replace("/", " / ").replace("  ", " "))
-
-	if official_name and official_name != name:
-		make_osm_line ("official_name", official_name.replace("/", " / ").replace("  ", " "))
-
-	# Other tags of area
-
-	make_osm_line ("ref:naturvern", area['identifikasjon_lokalid'])
-	make_osm_line ("naturbase:url", area['faktaark'])
-	make_osm_line ("related_law", area['verneforskrift'])
-	make_osm_line ("start_date", "%s-%s-%s" % (area['vernedato'][0:4], area['vernedato'][4:6], area['vernedato'][6:8]))
-
-	if area['forvaltningsmyndighet']:
-		make_osm_line ("operator", area['forvaltningsmyndighet'].replace("  ", " "))
-
-	# Type of protected area
-
-	protect_class = ""
-
-	if area['iucn']:
-		protect_class = iucn_code[ area['iucn'] ]
-	
-	if not protect_class and area['verneform']:
-		verneform = area['verneform'].lower()
-		if "naturreservat" in verneform:
-			protect_class = "1a"
-		elif "naturminne" in verneform:
-			protect_class = "3"
-		elif "fredning" in verneform or "biotop" in verneform:
-			protect_class = "4"
-
-	if protect_class:
-		make_osm_line ("protect_class", protect_class)
-
-	if protect_class in ["1a", "1b", "4"]:
-		make_osm_line ("leisure", "nature_reserve")
-		make_osm_line ("boundary", "protected_area")
-	elif protect_class == "2":
-		make_osm_line ("boundary", "national_park")
-#		if not relation:
-#			make_osm_line ("area", "yes")  # For rendering. Not needed since 2020
-	else:
-		make_osm_line ("boundary", "protected_area")
-
-	if area['verneform'] and area['verneform'] in verneform_description:
-		make_osm_line ("naturbase:verneform", verneform_description[ area['verneform'] ])
-
-	if area['verneplan'] and area['verneplan'] in verneplan_description:
-		make_osm_line ("naturbase:verneplan", verneplan_description[ area['verneplan'] ])
-
-	make_osm_line ("KOMMUNE", area['kommnr'])
-
-	# Notify if coding is not known
-
-	if area['iucn'] and area['iucn'] not in iucn_code:
-		message ("\t*** IUCN code not known: %s\n" % area['iucn'])
-	if area['verneplan'] and area['verneplan'] not in verneplan_description:
-		message ("\t*** Verneplan not known: %s\n" % area['verneplan'])
-	if area['verneform'] and area['verneform'] not in verneform_description:
-		message ("\t*** Verneform not known: %s\n" % area['verneform'])
-
-	# Provide debug information
-
-	if debug:
-		if area['iucn']:
-			make_osm_line ("IUCN", area['iucn'])
-		if area['verneform']:
-			make_osm_line ("VERNEFORM", area['verneform'])
-		if area['verneplan']:
-			make_osm_line ("VERNEPLAN", area['verneplan'])
-		if area['navn']:
-			make_osm_line ("NAVN", area['navn'])
-		if area['offisieltnavn']:
-			make_osm_line ("OFFISIELTNAVN", area['offisieltnavn'])
-
-# Produce leisure area tags
-
-def tag_leisure (area):
-
-	make_osm_line ("boundary", "protected_area")
-	make_osm_line ("protect_class", "21")
-	make_osm_line ("ref:friluft", area['identifikasjon_lokalid'])
-	make_osm_line ("naturbase:url", area['faktaark'])
-	make_osm_line ("name", area['omradenavn'])
-	make_osm_line ("BESKRIVELSE", area['omraadebeskrivelse'])
-	make_osm_line ("KOMMUNE", area['kommnr'])
-
-#	for key, value in iter(area.items()):
-#		if key != "members":
-#			make_osm_line(key, value)
 
 
 # Main program
@@ -451,208 +788,57 @@ if __name__ == '__main__':
 
 	# Load all protected areas
 
+	start_time = time.time()
 	message ("\nConverting Naturbase protected areas to OSM file\n")
 	message ("Loading data ...")
-	
+
+	features = []  # Will contain geojson features for all protected areas
+
+	datatype = ""
 	if len(sys.argv) > 1:
-		filename = sys.argv[1].replace(".geojson", "").replace(".json", "")
-	else:
-		sys.exit("No input filename provided\n")
+		if ".geojson" in sys.argv[1]:
+			datatype = "geojson"
+			filename = sys.argv[1].lower().replace(".geojson", "") + "_relations"
+			load_data(sys.argv[1].lower())  # Load file
+		elif sys.argv[1] == "naturvern":
+			datatype = "naturvern"
+			filename = "naturvernområder"
+			load_data("naturvern")
+		elif sys.argv[1] == "friluft":
+			datatype = "friluft"
+			filename = "friluftsområder"
+			load_data("friluft")
 
-	file = open(filename + ".json")
-	area_data = json.load(file)
-	file.close()
+	if not datatype:
+		sys.exit("Please provide 'naturvern', 'friluft' or geojson filename\n")
 
-	# Count polygons
-
-	total_objects = 0
-	for area in area_data['features']:
-		if "objtype" in area['properties']:
-			area['properties']['objekttype'] = area['properties']['objtype']
-		elif "objekktype" in area['properties']:
-			area['properties']['objekttype'] = area['properties']['objekktype']
-		if area['properties']['objekttype'] in ["Naturvernområde", "SikraFriluftslivsområde"]:
-			total_objects += 1
-
-	message (" %s polygons\n" % total_objects)
-
-	if debug:
-		logfile = open (filename + "_log.txt", "w")
+	count = len(features)
+	message (" %i %sområder\n" % (count, datatype))
 
 	# Create relations including splitting areas into member ways
 
 	message ("Creating relations ...\n")
 
-	areas = {}
-	ways = []
-	near_ways = []
-	count_areas = 0
+	areas = {}  # All protected areas
+	ways = []   # All way segments (members of area multipolygons)
+	ref_id = 0  # Area id for geojson input
 
-	for area in area_data['features']:
-		info = area['properties']
+	for feature in features:
+		count -= 1
+		message ("\r%i " % count)
+		process_feature(feature)
 
-		if info['objekttype']in ["Naturvernområde", "SikraFriluftslivsområde"] and count_areas < 20000:
-			total_objects -= 1
-			message ("\r%i " % total_objects)
-			if area['geometry']['type'] == "MultiPolygon":
-				outer_polygon = area['geometry']['coordinates'][0]
-				inner_polygon = area['geometry']['coordinates'][1]
-			else:
-				outer_polygon = [ area['geometry']['coordinates'][0] ]
-				inner_polygon = area['geometry']['coordinates'][1:]
+	message ("\r \t%i protected areas, %i ways\n" % (len(areas), len(ways)))
 
-			# Avoid circles
+	# Simplify ways and output file
 
-			if not((len(outer_polygon[0]) == 41) and \
-					(outer_polygon[0][10][1] - outer_polygon[0][30][1] < 0.000180) and  \
-					(outer_polygon[0][10][1] - outer_polygon[0][30][1] > 0.000176)):
+	if split:
+		combine_ways()
 
-				ref = info['identifikasjon_lokalid']
+	if simplify:
+		simplify_ways()
 
-				if not(ref in areas):
-					areas[ref] = copy.deepcopy(area['properties'])
-					areas[ref]['members'] = []
-					count_areas += 1
-					log ("\n\nArea: %s \n" % ref)
+	output_file(filename + ".osm")
 
-				for polygon in outer_polygon:
-					process_line (ref, polygon, "outer")
-
-				for polygon in inner_polygon:
-					process_line (ref, polygon, "inner")
-
-	message ("\r%i protected areas, %i ways\n" % (count_areas, len(ways)))
-
-	# Produce OSM file header
-
-	message ("Writing to file '%s.osm' ...\n" % filename)
-
-	file = open (filename + ".osm", "w")
-	file.write ('<?xml version="1.0" encoding="UTF-8"?>\n')
-	file.write ('<osm version="0.6" generator="reserve2osm v%s" upload="false">\n' % version)
-
-	node_id = -1000
-	count = count_areas
-
-	# Iterate all areas and produce OSM file
-	# First all areas consisting of exactly one close way (no relation), then relations including all national parks
-
-	for batch in [False, True]:
-
-		for ref, area in iter(areas.items()):
-
-			relation = (len(area['members']) > 1)
-
-			if relation == batch:
-
-				count -= 1
-				message ("\r%i " % count)
-
-				for member in area['members']:
-					way_ref = member['way_ref']
-					way = ways[way_ref]
-					line = way['line']
-
-					if not ("way_id" in way):
-
-						# Start node
-
-						old_node_id = find_node_id(line[0])
-
-						if old_node_id:
-							way['start_node1'] = old_node_id
-						else:
-							node_id -= 1
-							file.write ('  <node id="%i" lat="%.7f" lon="%.7f" />\n' % (node_id, line[0][1], line[0][0]))
-							way['start_node1'] = node_id
-						
-						# Middle nodes
-
-						first_node = node_id - 1
-						last_node = node_id
-
-						for coordinate in line[1:-1]:
-							node_id -= 1
-							last_node = node_id
-							file.write ('  <node id="%i" lat="%.7f" lon="%.7f" />\n' % (node_id, coordinate[1], coordinate[0]))
-
-						way['start_node2'] = first_node
-						way['end_node2'] = last_node
-
-						# End node
-
-						if (line[0][0] != line[-1][0]) or (line[0][1] != line[-1][1]):
-							old_node_id = find_node_id(line[-1])
-							if old_node_id:
-								way['end_node1'] = old_node_id
-							else:
-								node_id -= 1
-								file.write ('  <node id="%i" lat="%.7f" lon="%.7f" />\n' % (node_id, line[-1][1], line[-1][0]))
-								way['end_node1'] = node_id
-						else:
-							way['end_node1'] = way['start_node1']
-
-						# Output way if member of relation
-
-						if relation:
-
-							node_id -= 1
-							file.write ('  <way id="%i">\n' % node_id)
-							make_osm_line ("boundary", "protected_area")
-							if debug:
-								make_osm_line ("WAY_REF", str(member['way_ref']))
-							way['way_id'] = node_id
-
-							file.write ('    <nd ref="%i" />\n' % way['start_node1'])
-							if first_node >= last_node:
-								for node in range(first_node, last_node - 1, -1):
-									file.write ('    <nd ref="%i" />\n' % node)
-							file.write ('    <nd ref="%i" />\n' % way['end_node1'])
-
-							file.write ('  </way>\n')
-
-				# Header section of area
-
-				node_id -= 1
-				if relation:
-					file.write ('  <relation id="%i" >\n' % node_id)
-					make_osm_line ("type", "boundary")
-
-				else:
-					file.write ('  <way id="%i">\n' % node_id)
-					ways[ area['members'][0]['way_ref'] ]['way_id'] = node_id
-
-				if area['objekttype'] == "Naturvernområde":
-					tag_reserve (area)
-				elif area['objekttype'] == "SikraFriluftslivsområde":
-					tag_leisure (area)
-
-				# End section of area
-
-				if not relation:
-					if debug:
-						make_osm_line ("WAY_REF", str(member['way_ref']))
-
-					file.write ('    <nd ref="%i" />\n' % way['start_node1'])
-					if first_node >= last_node:
-						for node in range(way['start_node2'], way['end_node2'] - 1, -1):
-							file.write ('    <nd ref="%i" />\n' % node)
-					file.write ('    <nd ref="%i" />\n' % way['end_node1'])	
-
-					file.write ('  </way>\n')
-
-				else:
-					for member in area['members']:
-						file.write ('    <member type="way" ref="%i" role="%s" />\n' % (ways[member['way_ref']]['way_id'], member['role']))
-					file.write ('  </relation>\n')
-
-
-	# Produce OSM file footer
-
-	file.write ('</osm>\n')
-	file.close()
-
-	if debug:
-		logfile.close()
-
-	message ("\n%i elements written to file\n" % (-1000 - node_id))
+	duration = time.time() - start_time
+	message ("Time: %i seconds\n\n" % duration)
